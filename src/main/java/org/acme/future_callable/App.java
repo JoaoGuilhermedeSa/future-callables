@@ -3,20 +3,20 @@ package org.acme.future_callable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.acme.future_callable.model.Entity;
 
 public class App {
 
 	public static void main(String[] args) {
-		boolean heroesLost = false;
 		ExecutorService executor = Executors.newFixedThreadPool(4);
-		List<Future<Double>> attackResults;
-		List<Future<Double>> enemyResults;
 		Random random = new Random();
 
 		List<Entity> heroes = new ArrayList<>();
@@ -26,43 +26,26 @@ public class App {
 
 		Entity enemy = new Entity("Dragon", 3, 1000);
 
-		while (enemy.getHealth() > 0 || heroes.size() > 0) {
-			attackResults = new ArrayList<>();
-			enemyResults = new ArrayList<>();
+		while (enemy.getHealth() > 0 && !heroes.isEmpty()) {
+			List<Callable<Double>> heroAttacks = new ArrayList<>();
+			List<Callable<Double>> enemyAttacks = new ArrayList<>();
 
 			for (Entity hero : heroes) {
-				attackResults.add(executor.submit(hero.attack(enemy)));
+				heroAttacks.add(hero.attack(enemy));
 			}
-
-			if (heroes.size() == 0) {
-				heroesLost = true;
-				System.out.println("Todos os heróis morreram.");
+			int totalDamage = processAttacks(executor, heroAttacks);
+			enemy.setHealth(enemy.getHealth() - totalDamage);
+			System.out.println("O " + enemy.getEntityName() + " sofreu " + totalDamage + " de dano. Ainda tem "
+					+ Math.max(enemy.getHealth(), 0) + " pontos de vida.");
+			if (enemy.getHealth() < 1) {
 				break;
 			}
 
 			Entity targetedHero = heroes.get(random.nextInt(heroes.size()));
+			enemyAttacks.add(enemy.attack(targetedHero));
+			enemyAttacks.add(enemy.attack(targetedHero));
 
-			enemyResults.add(executor.submit(enemy.attack(targetedHero)));
-			enemyResults.add(executor.submit(enemy.attack(targetedHero)));
-
-			int totalDamage = 0;
-			for (Future<Double> result : attackResults) {
-				try {
-					totalDamage += result.get();
-				} catch (InterruptedException | ExecutionException e) {
-					System.out.println(e.getCause().getMessage());
-				}
-			}
-
-			int enemyDealtDamage = 0;
-
-			for (Future<Double> result : enemyResults) {
-				try {
-					enemyDealtDamage += result.get();
-				} catch (InterruptedException | ExecutionException e) {
-					System.out.println(e.getCause().getMessage());
-				}
-			}
+			int enemyDealtDamage = processAttacks(executor, enemyAttacks);
 
 			targetedHero.setHealth(targetedHero.getHealth() - enemyDealtDamage);
 			if (targetedHero.getHealth() <= 0) {
@@ -70,18 +53,33 @@ public class App {
 				heroes.remove(targetedHero);
 			}
 
-			enemy.setHealth(enemy.getHealth() - totalDamage);
-
-			System.out.println("O " + enemy.getEntityName() + " sofreu " + totalDamage + " de dano. Ainda permanecem "
-					+ Math.max(enemy.getHealth(), 0) + " pontos de vida.");
-
 		}
-		if (heroesLost && enemy.getHealth() < 0) {
-			System.out.println("Stalemate.");
-		} else
-		if (!heroesLost) {
-			System.out.println("O " + enemy.getEntityName() + " foi eliminado.");
+
+		if (enemy.getHealth() > 0) {
+			System.out.println("Todos os heróis morreram. O inimigo venceu!");
+		} else {
+			System.out.println("O " + enemy.getEntityName() + " foi eliminado!");
 		}
+
 		executor.shutdown();
+	}
+
+	private static int processAttacks(ExecutorService executor, List<Callable<Double>> attacks) {
+		int totalDamage = 0;
+		try {
+			List<Future<Double>> results = executor.invokeAll(attacks);
+			for (Future<Double> result : results) {
+				try {
+					if (result.isDone()) {
+						totalDamage += result.get(2, TimeUnit.SECONDS);
+					}
+				} catch (InterruptedException | ExecutionException | TimeoutException e) {
+					System.out.println("Erro no ataque: " + e.getMessage());
+				}
+			}
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+		return totalDamage;
 	}
 }
